@@ -45,7 +45,7 @@ def read_cloudnet_categorize_model_data(
                                             file_pattern=file_pattern)
     ds = read_files(files, process_fct=preprocess_model_data)
     
-    return ds
+    return ds.load()
 
 
 def read_cloudnet_microphysics_retrievals_data(
@@ -78,8 +78,10 @@ def read_cloudnet_microphysics_retrievals_data(
         ds_dict[key] = read_files(files)
     
     ds = xr.merge(ds_dict.values())
+    ds = add_height_levels_from_layers(ds)
+    ds = add_iwc_lwc_for_levels(ds)
     
-    return ds
+    return ds.load()
 
 
 def read_files(files: list, concat_dim='time', process_fct=None):
@@ -89,3 +91,27 @@ def read_files(files: list, concat_dim='time', process_fct=None):
     ds = ds.sortby(concat_dim)
     
     return ds
+
+
+def add_height_levels_from_layers(ds: xr.Dataset):
+    
+    height_lay = ds.height.values
+    height_lev = 0.5*(height_lay[1:] + height_lay[:-1])
+    height_lev_bot = np.array([2*height_lay[0] - height_lev[0]])
+    height_lev_top = np.array([height_lay[-1] + 0.5*(height_lay[-1] - height_lay[-2])])
+    height_lev = np.concatenate((height_lev_bot, 
+                                 height_lev,
+                                 height_lev_top))
+    ds = ds.assign_coords({'height_lev': (['height_lev'], height_lev)})
+    
+    return ds
+
+
+def add_iwc_lwc_for_levels(DS: xr.Dataset):
+    
+    n_time, n_hgt_lev = len(DS.time), len(DS.height_lev)
+    for wc, wc_lev in zip(['iwc', 'lwc'], ['iwc_lev', 'lwc_lev']):
+        DS[wc_lev] = xr.DataArray(np.zeros((n_time, n_hgt_lev), dtype=np.float64), dims=['time','height_lev'])
+        DS[wc_lev][:,1:] = DS[wc].values
+        
+    return DS
