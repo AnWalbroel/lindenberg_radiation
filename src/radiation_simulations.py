@@ -6,7 +6,7 @@ import xarray as xr
 from skyfield import api
 from skyfield.api import Loader
 
-import _paths
+from _paths import path_radiation_sim, path_tcars_data
 from readers.read_cloudnet import (read_cloudnet_categorize_model_data,
                                    read_cloudnet_microphysics_retrievals_data)
 from tools.plot_tools import get_cm_cmap, change_colormap_len, create_colourbar
@@ -20,10 +20,7 @@ def main():
     Radiation simulations using pyRRTMG (T-CARS ver).
     """
     
-    path_output = os.path.join(os.environ['PATH_DATA_BASE'],
-                               "radiation_simulations/")
-    path_tcars_data = os.path.join(os.environ['PATH_DATA_BASE'],
-                                   "tcars_data/")
+    path_output = path_radiation_sim
     path_plots = os.path.join(os.environ['PATH_PLOTS_BASE'],
                               "data_overview/")
     

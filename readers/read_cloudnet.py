@@ -4,7 +4,7 @@ import pdb
 import xarray as xr
 import numpy as np
 
-import _paths
+from _paths import path_cloudnet_data
 from tools.data_tools import get_files_daterange_filepattern
 
 categorize_model_translate_dict = {'temperature': 'temp', 
@@ -41,9 +41,7 @@ def read_cloudnet_categorize_model_data(
         
         return ds
     
-    if path_data == '':
-        path_data = os.path.join(os.environ['PATH_DATA_BASE'],
-                                 "cloudnet/")
+    if path_data == '': path_data = path_cloudnet_data
     
     files = get_files_daterange_filepattern(path_data=path_data,
                                             date0=date0,
@@ -66,9 +64,7 @@ def read_cloudnet_microphysics_retrievals_data(
     Reads droplet and ice crystal effective radii, as well as liquid and ice water content data.
     """
     
-    if path_data == '':
-        path_data = os.path.join(os.environ['PATH_DATA_BASE'],
-                                 "cloudnet/")
+    if path_data == '': path_data = path_cloudnet_data
     
     file_patterns = {'der': "__DATE_STRING___lindenberg_der.nc",
                      'ier': "__DATE_STRING___lindenberg_ier.nc",
