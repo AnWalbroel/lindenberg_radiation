@@ -7,6 +7,7 @@ import xarray as xr
 
 import tools.constants as constants
 from tools.met_tools import q_to_h2ovmr
+from tools.data_tools import convert_units
 
 
 def read_default_profiles(scaling=None, offset=None):
@@ -127,7 +128,7 @@ def read_default_profiles(scaling=None, offset=None):
     return DS
     
     
-def import_vmr_std_atm(file: str):
+def import_anderson_std_atm(file: str):
     
     """
     Imports greenhouse gas concentrations from standard atmospheres given by
@@ -149,52 +150,69 @@ def import_vmr_std_atm(file: str):
                               'co': np.float32,'ch4':np.float32,'o2':np.float32}, skiprows=1)
     df.index = df['height']
 
-    DS = xr.Dataset(coords={'height': (['height'], df.index.values*1000.)})
+    ds = xr.Dataset(coords={'height': (['height'], df.index.values*1000.)})
     for var in df.columns:
-        if var in DS.coords: 
+        if var in ds.coords: 
             continue
         elif var in ['h2o', 'co2', 'o3', 'n2o', 'co', 'ch4', 'o2']:
             df[var] = constants.sfac['ppm'] * df[var].values
-        DS[var] = xr.DataArray(df[var].values, dims=['height'])
+        ds[var] = xr.DataArray(df[var].values, dims=['height'])
     
-    return DS
+    return ds
 
 
-def import_trace_gas_csv_old(file):
-
+def import_std_atm(file: str):
+    
     """
-    Imports the NOAA Trace Gas data from "https://gml.noaa.gov/aggi/aggi.html" and puts it
-    into an xarray data set.
-
+    Imports height, pressure, temperature, water vapour, CO2, O3, N2O, CO, CH4 and O2 data from
+    University of Oxford, National Centre for Earth Observation - Natural Environmental Research 
+    Council: RFM Atmospheric Profiles - FASCODE/ICRCCM Model Atmospheres, 
+    https://eodg.atm.ox.ac.uk/RFM/atm/
+    This data also seems to be the same as in
+    Anderson, G P, Clough, S A, Kneizys, F X, Chetwynd, J H, and Shettle, E P. AFGL (Air Force 
+    Geophysical Laboratory) atmospheric constituent profiles (0. 120km). Environmental research 
+    papers. United States: N. p., 1986. Web.
+    This reader is also based on the read_atm.py provided in https://eodg.atm.ox.ac.uk/RFM/atm/.
+    Converts gas data from ppmv to volume mixing ratios, and uses SI units elsewhere.
+    
     Parameters:
     -----------
     file : str
-        Full path and filename of trace gas concentration data in a .csv table.
+        Full path and file name to standard atmosphere data.
     """
-
-    # open the csv and read it:
-    with open(file, newline='') as csvfile:
-
-        csv_reader = csv.reader(csvfile, delimiter=',')
-        list_of_lines = [row for row in csv_reader]
-
-    # below the header, the trace gas name and units can be extracted:
-    tg_species = [species.lower().replace('-','') for species in list_of_lines[2] if species != ""]
-    units = [unit for unit in list_of_lines[3] if unit != ""]
-    assert len(tg_species) == len(units)
-
-    # extract data: multiply data with the respective unit
-    data_lines = list_of_lines[4:-5]
-    data = np.array([[np.nan if dd == "nd" else float(dd)*constants.sfac[units[kk]] for kk, dd in enumerate(data_line[1:])] 
-                    for data_line in data_lines])
-    data_times = np.array([np.datetime64(f"{int(float(data_line[0]))}-07-01T00:00:00") for data_line in data_lines])
-
-    # initialize data set and fill it with data
-    DS = xr.Dataset(coords={'time': (['time'], data_times.astype('datetime64[ns]'))})
-    for kk, species in enumerate(tg_species):
-        DS[species] = xr.DataArray(data[:,kk], dims=['time'])
-
-    return DS
+    
+    vmr_data = ['h2o', 'co2', 'o3', 'n2o', 'co', 'ch4', 'o2']
+    rename_dict = {'pre': 'pres',
+                   'tem': 'temp',}
+    unit_conv_dict = {'pres': [0., 100.]}
+    for vmr_ in vmr_data:
+        rename_dict[vmr_] = vmr_
+        unit_conv_dict[vmr_] = [0., constants.sfac['ppm']]
+    
+    with open(file) as f:
+        rec = '!'
+        while rec[0] == '!': rec = f.readline()  # skip initial comments
+        flds = rec.split()
+        nlev = int(flds[0])
+        atm = { 'nlev':nlev } 
+        rec = f.readline()
+        while rec[0:4].lower() != '*end':  # repeat until end marker record
+            if rec[0] == '!': continue 
+            flds = rec.split()
+            key = flds[0][1:].lower() # remove '*' and change to lower case
+            prf = np.fromfile(f,sep=", ",count=nlev)
+            atm[key] = prf
+            rec = f.readline()
+            if rec == '': break   # also exit if end-of-file without *END
+    
+    ds = xr.Dataset(coords={'height': (['height'], atm['hgt']*1000.)})
+    for key, val in rename_dict.items():
+        ds[val] = xr.DataArray(atm[key], dims=['height'])
+    
+    for var in unit_conv_dict:
+        ds[var] = convert_units(ds[var], unit_conv_dict[var])
+    
+    return ds
 
 
 def import_trace_gas_csv(file):
