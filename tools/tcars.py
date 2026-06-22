@@ -9,7 +9,7 @@ import pyrrtmg as rrtmg
 
 import tools.constants as constants
 from tools.data_tools import encode_time, write_basic_attributes, update_netCDF_file_history
-from readers.readers_tcars import import_vmr_std_atm, import_trace_gas_csv
+from readers.readers_tcars import import_std_atm, import_trace_gas_csv
 from tools.met_tools import rho_air, h2ovmr_to_q, convert_spechum_to_abshum, compute_heating_rate
 
 
@@ -23,13 +23,13 @@ class tcars:
     Init:
     path_tcars_data : str
         Full path where additional data for T-CARS is stored.
-    DS : xr.dataset
+    ds : xr.dataset
         Dataset containing atmospheric data. Must have "time" and "height" dimensions.
     """
     
-    def __init__(self, path_tcars_data: str, DS: xr.Dataset):
+    def __init__(self, path_tcars_data: str, ds: xr.Dataset):
         
-        self.DS = DS
+        self.ds = ds
         self.path_tcars_data = path_tcars_data
         
         # for more detailed descriptions of the flags below, see 
@@ -60,9 +60,9 @@ class tcars:
         self.iflag_h2o_vmr = 1
         self.iflag_co2_vmr = 0      # additional option: 2: use NOAA measurements
         self.iflag_o3_vmr = 0
-        self.iflag_n2o_vmr = 1      # additional option: 2: use NOAA measurements
-        self.iflag_ch4_vmr = 1      # additional option: 2: use NOAA measurements
-        self.iflag_o2_vmr = 1
+        self.iflag_n2o_vmr = 0      # additional option: 2: use NOAA measurements
+        self.iflag_ch4_vmr = 0      # additional option: 2: use NOAA measurements
+        self.iflag_o2_vmr = 0
         
         self.iflag_emissivity = 0   # -1: use emissivity of 1, 0: use emissivity of 0.996, 
                                     # 1: user-defined emissivity in set_emissivity
@@ -73,55 +73,92 @@ class tcars:
         self.set_emissivity()
         
         
-    def load_background_vmrs(self):
+    def load_background_vmrs(self, which_std_atm='subarctic_summer'):
         
-        DS = import_vmr_std_atm(self.path_tcars_data + "vmr_Anderson_1986/subarctic_summer.txt")
-        DS = DS.expand_dims(dim={'time': self.DS.time.values}, axis=0)
-        DS = DS.interp(coords={'height': self.DS.height.values}, kwargs={"fill_value": 'extrapolate'})
+        """
+        Loads trace gas data from modeled standard atmosphere and observations.
+        """
         
-        n_time, n_hgt = len(self.DS.time), len(self.DS.height)
+        def std_atm_data_to_tcars_time_height_grid(ds: xr.Dataset):
+            
+            ds = ds.expand_dims(dim={'time': self.ds.time.values}, axis=0)
+            ds = ds.interp(coords={'height': self.ds.height.values}, kwargs={"fill_value": 'extrapolate'})
+            
+            return ds
+        
+        def trace_gas_obs_to_tcars_time_height_grid(ds: xr.Dataset):
+            
+            if ((ds.time.values[-1] < self.ds.time.values[0]) or 
+                (ds.time.values[0] > self.ds.time.values[-1])):
+                ds = ds.sel(time=self.ds.time.values, method='nearest')
+                ds = ds.assign_coords({'time': (['time'], self.ds.time.values)})
+            else:
+                ds = ds.interp(time=self.ds.time.values).expand_dims(dim={'height': self.ds.height.values}, axis=1)
+            ds = ds.expand_dims(dim={'height': self.ds.height.values}, axis=1)
+            
+            return ds
+        
+        std_atm_filename_dict = {
+            'subarctic_summer': "sas.atm",
+            'subarctic_winter': "saw.atm",
+            'midlat_summer': "mls.atm",
+            'midlat_winter': "mlw.atm",
+            'std': "std.atm",
+            'tropical': "tro.atm",
+            }
+        
+        filename = os.path.join(self.path_tcars_data, 
+                                "std_atm/",
+                                std_atm_filename_dict[which_std_atm])
+        ds = import_std_atm(filename)
+        ds = std_atm_data_to_tcars_time_height_grid(ds)
+        
+        n_time, n_hgt = len(self.ds.time), len(self.ds.height)
         dims_list = ['time', 'height']
         for var in ['h2o', 'co2', 'o3', 'n2o', 'co', 'ch4', 'o2']:
             var_vmr = var + "_vmr"
             
-            if (f'iflag_{var_vmr}' in self.__dict__.keys()) and (self.__dict__[f'iflag_{var_vmr}'] == 0):
-                self.DS[var_vmr] = xr.DataArray(DS[var].values, dims=dims_list)
-            elif (f'iflag_{var_vmr}' not in self.__dict__.keys()):
-                self.DS[var_vmr] = xr.DataArray(DS[var].values, dims=dims_list)
+            if ((f'iflag_{var_vmr}' in self.__dict__.keys()) and (self.__dict__[f'iflag_{var_vmr}'] == 0) or 
+                (f'iflag_{var_vmr}' not in self.__dict__.keys())):
+                self.ds[var_vmr] = xr.DataArray(ds[var].values, dims=dims_list)
         
+
         add_ghgs = {'cfc11': 232.0, 
                     'cfc12': 516.0, 
                     'cfc22': 233.0, 
                     'ccl4': 82.0}       # all in ppt, Source: NOAA
         for var in add_ghgs:
-            self.DS[var+"_vmr"] = xr.DataArray(np.full((n_time, n_hgt), add_ghgs[var]*constants.sfac['ppt']), 
+            self.ds[var+"_vmr"] = xr.DataArray(np.full((n_time, n_hgt), add_ghgs[var]*constants.sfac['ppt']), 
                                                dims=dims_list)
         
-        DS = import_trace_gas_csv(self.path_tcars_data + "/trace_gas_data/NOAA_Annual_Mean_MoleFractions.csv")
-        
-        if ((DS.time.values[-1] < self.DS.time.values[0]) or 
-            (DS.time.values[0] > self.DS.time.values[-1])):
-            DS = DS.sel(time=self.DS.time.values, method='nearest')
-            DS = DS.assign_coords({'time': (['time'], self.DS.time.values)})
-        else:
-            DS = DS.interp(time=self.DS.time.values).expand_dims(dim={'height': self.DS.height.values}, axis=1)
-        DS = DS.expand_dims(dim={'height': self.DS.height.values}, axis=1)
+        ds = import_trace_gas_csv(self.path_tcars_data + "/trace_gas_data/NOAA_Annual_Mean_MoleFractions.csv")
+        ds = trace_gas_obs_to_tcars_time_height_grid(ds)
 
         for var in ['co2', 'n2o', 'ch4', 'cfc11', 'cfc12', 'ccl4']:
             var_vmr = var + "_vmr"
-            if (f'iflag_{var_vmr}' in self.__dict__.keys()) and (self.__dict__[f'iflag_{var_vmr}'] == 2):
-                self.DS[var_vmr] = xr.DataArray(DS[var].values, dims=dims_list)
-            elif (f'iflag_{var_vmr}' not in self.__dict__.keys()):
-                self.DS[var_vmr] = xr.DataArray(DS[var].values, dims=dims_list)
+            if (((f'iflag_{var_vmr}' in self.__dict__.keys()) and (self.__dict__[f'iflag_{var_vmr}'] == 2)) or 
+                (f'iflag_{var_vmr}' not in self.__dict__.keys())):
+                self.ds[var_vmr] = xr.DataArray(ds[var].values, dims=dims_list)
 
     
-    def set_rrtmg_input(self):
+    def set_rrtmg_input(self, which_std_atm: str):
         
         """
         Forward data loaded into Dataset to dictionaries used by T-CARS (=RRTMG).
+        
+        Parameters:
+        -----------
+        which_std_atm : str
+            Defines which standard atmosphere to load. The following options are supported:
+            - "subarctic_summer"
+            - "subarctic_winter"
+            - "midlat_summer"
+            - "midlat_winter"
+            - "std"
+            - "tropical"
         """
 
-        self.load_background_vmrs()
+        self.load_background_vmrs(which_std_atm=which_std_atm)
         self.update_DS()
         self.update_cloud_properties()
         self.update_aerosol_properties()
@@ -135,7 +172,7 @@ class tcars:
         for ds_var, t_var in self.trl_.items():
             if t_var in atm_args:
                 try:
-                    atm[t_var] = np.asfortranarray(self.DS[ds_var], dtype=np.float64)
+                    atm[t_var] = np.asfortranarray(self.ds[ds_var], dtype=np.float64)
                 except KeyError:
                     print(f"{ds_var} is needed but was not found in the dataset provided to {os.path.basename(__file__)}" +
                         f" while executing {sys.argv[0]}.")
@@ -150,8 +187,8 @@ class tcars:
                     'cos_zenith',           # cosine of the solar zenith angle
                     ]:
             
-            if var in self.DS.data_vars:
-                self.__setattr__(var, self.DS[var].values)
+            if var in self.ds.data_vars:
+                self.__setattr__(var, self.ds[var].values)
             
             # Fill values if data not available in DS:
             elif var == 'julian_day':
@@ -203,7 +240,7 @@ class tcars:
     def set_translation_dict(self):
         
         """
-        Translation dict to rename variables of self.DS (keys) to the names used by T-CARS 
+        Translation dict to rename variables of self.ds (keys) to the names used by T-CARS 
         (values).
         """
         
@@ -212,8 +249,8 @@ class tcars:
                      'temp_sfc': 'Tsfc',
                      'pres_h': 'Plev',
                      'temp_h': 'Tlev',
-                     'lwp': 'lwp',
-                     'iwp': 'iwp',
+                     'clwp': 'lwp',
+                     'ciwp': 'iwp',
                      'clc': 'cldfrac',
                      're_liq': 're_liq',
                      're_ice': 're_ice',
@@ -246,7 +283,7 @@ class tcars:
                     're_liq',       # effective radius liquid, in um
                     ]:
             
-            shape_ = (len(self.DS.time), len(self.DS.height))
+            shape_ = (len(self.ds.time), len(self.ds.height))
             fill_val = 0.0
             if "_sw" in var:
                 shape_ = (rrtmg.nbnd_sw,) + shape_
@@ -258,7 +295,7 @@ class tcars:
     
     def init_aerosol_properties(self):
         
-        shape_base = (len(self.DS.time), len(self.DS.height))
+        shape_base = (len(self.ds.time), len(self.ds.height))
         
         kw = {'dtype': np.float64, 'order': "F"}
         self.aerosol_props = {
@@ -283,8 +320,8 @@ class tcars:
         temperature. This ensures consistency when editing temperature levels.
         """
         
-        self.DS['temp'][...] = 0.5*(self.DS['temp_h'].values[...,:-1] + self.DS['temp_h'].values[...,1:])
-        self.DS['temp_sfc'][:] = self.DS['temp_h'].sel(height_h=0., method='nearest')
+        self.ds['temp'][...] = 0.5*(self.ds['temp_h'].values[...,:-1] + self.ds['temp_h'].values[...,1:])
+        self.ds['temp_sfc'][:] = self.ds['temp_h'].sel(height_h=0., method='nearest')
     
     
     def update_cloud_properties(self):
@@ -300,7 +337,7 @@ class tcars:
     def update_properties(self, props: dict):
         
         prop_args = [*props.keys()]
-        for var in self.DS.data_vars:
+        for var in self.ds.data_vars:
             
             if var in prop_args:
                 var_update = var
@@ -308,7 +345,7 @@ class tcars:
                 var_update = self.trl_[var]
             else:
                 continue
-            props[var_update] = self.DS[var].values
+            props[var_update] = self.ds[var].values
         
         return props
     
@@ -324,7 +361,7 @@ class tcars:
         """
         
         array_kwargs = dict(dtype=np.float64, order='F')
-        emis_shape = (len(self.DS.time), 16)
+        emis_shape = (len(self.ds.time), 16)
         if self.iflag_emissivity == -1:
             emis_val = 1.0
         elif self.iflag_emissivity == 0:
@@ -360,9 +397,9 @@ class tcars:
     
     def organise_output(self):
         
-        self.OUT_DS = xr.Dataset(coords=self.DS.coords)
+        self.out_ds = xr.Dataset(coords=self.ds.coords)
         
-        n_time, n_hgt, n_hgt_h = len(self.DS.time), len(self.DS.height), len(self.DS.height_h)
+        n_time, n_hgt, n_hgt_h = len(self.ds.time), len(self.ds.height), len(self.ds.height_h)
         for var, flx in self.flxhr.items():
             shape_lay = (n_time, n_hgt)
             shape_lev = (n_time, n_hgt_h)
@@ -372,72 +409,72 @@ class tcars:
                 dims_list.append('height')
             elif flx.shape == shape_lev:
                 dims_list.append('height_h')
-            self.OUT_DS[var] = xr.DataArray(flx, dims=dims_list)
+            self.out_ds[var] = xr.DataArray(flx, dims=dims_list)
             
             
         # pyRRTMG seems to return incorrect heating rates for the uppermost height layer. 
         # Compute it manually instead:
-        spec_hum = h2ovmr_to_q(self.DS.h2o_vmr)
-        rho_v = convert_spechum_to_abshum(self.DS.temp, self.DS.pres*100., spec_hum)
-        rho = rho_air(self.DS.pres*100., self.DS.temp, rho_v)
+        spec_hum = h2ovmr_to_q(self.ds.h2o_vmr)
+        rho_v = convert_spechum_to_abshum(self.ds.temp, self.ds.pres*100., spec_hum)
+        rho = rho_air(self.ds.pres*100., self.ds.temp, rho_v)
         for sky_cond in ['', 'c']:
             for band in ['sw', 'lw']:
-                HR_ = compute_heating_rate(self.OUT_DS[f'{band}uflx{sky_cond}'], 
-                                           self.OUT_DS[f'{band}dflx{sky_cond}'], 
-                                           rho, self.DS.height_h, convert_to_K_day=True)
-                self.OUT_DS[f'{band}hr{sky_cond}'] = HR_
+                HR_ = compute_heating_rate(self.out_ds[f'{band}uflx{sky_cond}'], 
+                                           self.out_ds[f'{band}dflx{sky_cond}'], 
+                                           rho, self.ds.height_h, convert_to_K_day=True)
+                self.out_ds[f'{band}hr{sky_cond}'] = HR_
         
         
         # information about the variable names and their meanings: 
         # https://github.com/hdeneke/pyRRTMG/blob/master/src_f/_rrtmg.f90 , paragraph "! Output"
-        self.OUT_DS['height'].attrs = {'long_name': "Height of the full levels (centre of layer)", 
+        self.out_ds['height'].attrs = {'long_name': "Height of the full levels (centre of layer)", 
                                        'units': "m"}
-        self.OUT_DS['height_h'].attrs = {'long_name': "Height of the half levels (layer boundaries)", 
+        self.out_ds['height_h'].attrs = {'long_name': "Height of the half levels (layer boundaries)", 
                                          'units': "m"}
-        self.OUT_DS['swuflx'].attrs = {'long_name': "Upward shortwave flux at half level",
+        self.out_ds['swuflx'].attrs = {'long_name': "Upward shortwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['swdflx'].attrs = {'long_name': "Downward shortwave flux at half level",
+        self.out_ds['swdflx'].attrs = {'long_name': "Downward shortwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['swdirflx'].attrs = {'long_name': "Direct shortwave flux at half level",
+        self.out_ds['swdirflx'].attrs = {'long_name': "Direct shortwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['swhr'].attrs = {'long_name': "Shortwave radiative heating rates for layers",
+        self.out_ds['swhr'].attrs = {'long_name': "Shortwave radiative heating rates for layers",
                                        'units': "K day-1"}
-        self.OUT_DS['swuflxc'].attrs = {'long_name': "Clear sky upward shortwave flux at half level",
+        self.out_ds['swuflxc'].attrs = {'long_name': "Clear sky upward shortwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['swdflxc'].attrs = {'long_name': "Clear sky downward shortwave flux at half level",
+        self.out_ds['swdflxc'].attrs = {'long_name': "Clear sky downward shortwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['swdirflxc'].attrs = {'long_name': "Clear sky direct shortwave flux at half level",
+        self.out_ds['swdirflxc'].attrs = {'long_name': "Clear sky direct shortwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['swhrc'].attrs = {'long_name': "Clear sky shortwave radiative heating rates for layers",
+        self.out_ds['swhrc'].attrs = {'long_name': "Clear sky shortwave radiative heating rates for layers",
                                        'units': "K day-1"}
-        self.OUT_DS['lwuflx'].attrs = {'long_name': "Upward longwave flux at half level",
+        self.out_ds['lwuflx'].attrs = {'long_name': "Upward longwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['lwdflx'].attrs = {'long_name': "Downward longwave flux at half level",
+        self.out_ds['lwdflx'].attrs = {'long_name': "Downward longwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['lwhr'].attrs = {'long_name': "Longwave radiative heating rates for layers",
+        self.out_ds['lwhr'].attrs = {'long_name': "Longwave radiative heating rates for layers",
                                        'units': "K day-1"}
-        self.OUT_DS['lwuflxc'].attrs = {'long_name': "Clear sky upward longwave flux at half level",
+        self.out_ds['lwuflxc'].attrs = {'long_name': "Clear sky upward longwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['lwdflxc'].attrs = {'long_name': "Clear sky downward longwave flux at half level",
+        self.out_ds['lwdflxc'].attrs = {'long_name': "Clear sky downward longwave flux at half level",
                                        'units': "W m-2"}
-        self.OUT_DS['lwhrc'].attrs = {'long_name': "Clear sky longwave radiative heating rates for layers",
+        self.out_ds['lwhrc'].attrs = {'long_name': "Clear sky longwave radiative heating rates for layers",
                                        'units': "K day-1"}
         
-        self.OUT_DS.attrs['title'] = "RRTMG outputs from T-CARS environment"
+        self.out_ds.attrs['title'] = "RRTMG outputs from T-CARS environment"
     
     
     def save_output(self, path: str, filename: str):
         
         os.makedirs(path, exist_ok=True)
         
-        self.OUT_DS = write_basic_attributes(self.OUT_DS)
-        self.OUT_DS = update_netCDF_file_history(DS=self.OUT_DS,
+        self.out_ds = write_basic_attributes(self.out_ds)
+        self.out_ds = update_netCDF_file_history(DS=self.out_ds,
                                                  script_name=os.path.basename(__file__),
                                                  summary_str="create simulations",
                                                  history_attr_exists=False)
         
-        self.OUT_DS = encode_time(self.OUT_DS)
+        self.out_ds = encode_time(self.out_ds)
         
         outfile = path + filename
-        self.OUT_DS.to_netcdf(outfile, mode='w', format='NETCDF4')
+        self.out_ds.to_netcdf(outfile, mode='w', format='NETCDF4')
         print(f"Saved {outfile}....")
