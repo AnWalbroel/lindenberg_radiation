@@ -12,3 +12,5 @@ path_tcars_data = os.path.join(os.environ['PATH_DATA_BASE'],
                                "tcars_data/")
 path_cloudnet_data = os.path.join(os.environ['PATH_DATA_BASE'],
                                  "cloudnet/")
+path_radiation_obs = os.path.join(os.environ['PATH_DATA_BASE'],
+                                  "radiation/")
