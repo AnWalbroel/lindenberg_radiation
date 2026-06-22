@@ -11,6 +11,7 @@ from readers.read_cloudnet import (read_cloudnet_categorize_model_data,
                                    read_cloudnet_microphysics_retrievals_data)
 from tools.plot_tools import get_cm_cmap, change_colormap_len, create_colourbar
 from tools.met_tools import q_to_h2ovmr
+from tools.tcars import tcars
 
 
 def main():
@@ -21,6 +22,8 @@ def main():
     
     path_output = os.path.join(os.environ['PATH_DATA_BASE'],
                                "radiation_simulations/")
+    path_tcars_data = os.path.join(os.environ['PATH_DATA_BASE'],
+                                   "tcars_data/")
     path_plots = os.path.join(os.environ['PATH_PLOTS_BASE'],
                               "data_overview/")
     
@@ -34,17 +37,48 @@ def main():
     
     cn_model_ds = read_cloudnet_categorize_model_data(date0=date)
     cn_mp_ds = read_cloudnet_microphysics_retrievals_data(date0=date)
+    if data_quicklooks: data_overview_quicklooks(path_plots, cn_model_ds, cn_mp_ds, **set_dict)
     
     ds = prepare_tcars_ds(cn_model_ds, cn_mp_ds, height_grid, date)
+    tcars_client = tcars(path_tcars_data=path_tcars_data, ds=ds)
+    tcars_client = prepare_tcars_client_for_sim(tcars_client)
     
-    if data_quicklooks: data_overview_quicklooks(path_plots, cn_model_ds, cn_mp_ds, **set_dict)
+    tcars_client.set_rrtmg_input()
     pdb.set_trace()
     
-    # load cloudnet data, which also contains model output of thermodyn profiles
+    
     # set up t-cars
     # cloud sanity enforcer, check logic in loop
     # simplify load_background_vmrs if elif
     # Könntest du da die 2m Lufttemperatur einbeziehen? Als surface (skin) temperature könnte man einfach aus LW up mit gewählter Emissivitität (0.998? oder was da standardmäßig angenommen wird) berechnen. Könntest du den IWV vom HATPRO nehmen um das Modelprofil damit zu skalieren?
+    # make test without "radius_or_water_path_is_zero" test in sanity enforcer; or setting re_liq or re_ice to val[0] instead of 0 in first check
+
+
+def prepare_tcars_client_for_sim(tcars_client):
+    
+    tcars_client = customise_gas_flags(tcars_client)
+    tcars_client = set_emissivity(tcars_client, 0.998)      # TODO ADAPT
+    
+    return tcars_client
+
+
+def customise_gas_flags(tcars_client):
+    
+    tcars_client.iflag_co2_vmr = 2
+    tcars_client.iflag_o3_vmr = 0
+    tcars_client.iflag_n2o_vmr = 2
+    tcars_client.iflag_ch4_vmr = 2
+    tcars_client.iflag_o2_vmr = 0
+    
+    return tcars_client
+
+
+def set_emissivity(tcars_client, emissivity: float):
+    
+    tcars_client.iflag_emissivity = 1
+    tcars_client.set_emissivity(custom_emissivity=emissivity)
+    
+    return tcars_client
 
 
 def prepare_tcars_ds(
@@ -71,7 +105,6 @@ def prepare_tcars_ds(
     ds = add_solar_cos_zen_lindenberg(ds)
     ds = set_albedo(ds)
     ds = add_cloud_data(ds, mp_ds)
-    pdb.set_trace()
     
     return ds
 
@@ -80,7 +113,12 @@ def add_cloud_data(ds: xr.Dataset, mp_ds: xr.Dataset):
     
     def convert_to_rrtmg_units(ds: xr.Dataset):
         
+        """
+        From kg m-2 to g m-2. And from m to um.
+        """
+        
         for var in ['clwp', 'ciwp']: ds[var] *= 1000.
+        for var in ['re_liq', 're_ice']: ds[var] *= 1e+06
         
         return ds
     
@@ -92,8 +130,9 @@ def add_cloud_data(ds: xr.Dataset, mp_ds: xr.Dataset):
                                     're_ice': 'ciwp'}
         for k, val in bounds.items():
             wp = corresponding_water_path[k]
-            ds[k] = ds[k].where(~((ds[k] > 0.) & (ds[k] < val[0])), other=0.)
-            ds[wp] = ds[wp].where(~((ds[k] > 0.) & (ds[k] < val[0])), other=0.)
+            re_between_0_and_lower_bound = ((ds[k] > 0.) & (ds[k] < val[0]))
+            ds[k] = ds[k].where(~re_between_0_and_lower_bound, other=0.)
+            ds[wp] = ds[wp].where(~re_between_0_and_lower_bound, other=0.)
             
             radius_or_water_path_is_zero = (ds[k] == 0.) | (ds[wp] == 0.)
             ds[k] = ds[k].where(~radius_or_water_path_is_zero, other=0.)
@@ -107,32 +146,24 @@ def add_cloud_data(ds: xr.Dataset, mp_ds: xr.Dataset):
     for var in cloud_vars:
         if var in ds.data_vars:
             ds[var][...] = mp_ds[var].values
-    pdb.set_trace()
     
-    if (ds['clwp'] > 0).any():
-        ds['clwp'] = scale_microphysics_lwp_ret_by_hatpro_obs(ds['clwp'], hat_ds['lwp'],
-                                                             fill_mask=cloud_vars.fill_mask)
+    # if (ds['clwp'] > 0).any():
+    #     ds['clwp'] = scale_microphysics_lwp_ret_by_hatpro_obs(ds['clwp'], hat_ds['lwp'],
+    #                                                          fill_mask=cloud_vars.fill_mask)
+    
+    ds = convert_to_rrtmg_units(ds)
+    ds = cloud_sanity_enforcer(ds)
     
     ds['clc'] = ds['clc'].where((ds.re_liq == 0.) & 
                                 (ds.re_ice == 0.) &
                                 (ds.ciwp == 0.) &
                                 (ds.clwp == 0.), other=1.)
     
-    ds = convert_to_rrtmg_units(ds)
-    ds = cloud_sanity_enforcer(ds)
-    
-    # rename to re_liq, re_ice, iwc_lwv, lwc_lev
-    
-    # check if re_liq is avail when lwc is avail
-    # check if lwp == lwc integrated
-    
-    # sanity check
-    
     return ds
 
 
 def prepare_micophysics_dataset(mp_ds: xr.Dataset, height_lay: np.ndarray, height_lev: np.ndarray):
-
+    
     mp_ds = mp_ds.interp({'height': height_lay,
                           'height_lev': height_lev},
                          method='linear',
