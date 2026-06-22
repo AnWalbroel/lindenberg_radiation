@@ -399,9 +399,9 @@ class tcars:
         self.out_ds = xr.Dataset(coords=self.ds.coords)
         
         n_time, n_hgt, n_hgt_h = len(self.ds.time), len(self.ds.height), len(self.ds.height_h)
+        shape_lay = (n_time, n_hgt)
+        shape_lev = (n_time, n_hgt_h)
         for var, flx in self.flxhr.items():
-            shape_lay = (n_time, n_hgt)
-            shape_lev = (n_time, n_hgt_h)
             
             dims_list = ['time']
             if flx.shape == shape_lay:
@@ -474,6 +474,6 @@ class tcars:
         
         self.out_ds = encode_time(self.out_ds)
         
-        outfile = path + filename
+        outfile = os.path.join(path, filename)
         self.out_ds.to_netcdf(outfile, mode='w', format='NETCDF4')
         print(f"Saved {outfile}....")

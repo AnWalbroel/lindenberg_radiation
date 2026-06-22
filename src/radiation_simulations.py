@@ -39,18 +39,24 @@ def main():
     cn_mp_ds = read_cloudnet_microphysics_retrievals_data(date0=date)
     if data_quicklooks: data_overview_quicklooks(path_plots, cn_model_ds, cn_mp_ds, **set_dict)
     
-    ds = prepare_tcars_ds(cn_model_ds, cn_mp_ds, height_grid, date)
-    tcars_client = tcars(path_tcars_data=path_tcars_data, ds=ds)
-    tcars_client = prepare_tcars_client_for_sim(tcars_client)
+    for hour in range(24):
+        timeline = set_hourly_simulation_timeline(date=date, hour=hour, time=cn_mp_ds.time)
+        ds = prepare_tcars_ds(timeline, cn_model_ds, cn_mp_ds, height_grid)
+        tcars_client = tcars(path_tcars_data=path_tcars_data, ds=ds)
+        tcars_client = prepare_tcars_client_for_sim(tcars_client)
+        
+        tcars_client.set_rrtmg_input(which_std_atm="midlat_summer")
+        tcars_client.run_tcars()
+        
+        filename_tcars_sim = f"lindenberg_radiation_sim_{date_str.replace('-','')}T{hour:02}.nc"
+        tcars_client.save_output(path_output, filename_tcars_sim)
     
-    tcars_client.set_rrtmg_input(which_std_atm="midlat_summer")
-    pdb.set_trace()
-    tcars_client.run_tcars()
-    
-    
-    # set up t-cars
-    # Könntest du da die 2m Lufttemperatur einbeziehen? Als surface (skin) temperature könnte man einfach aus LW up mit gewählter Emissivitität (0.998? oder was da standardmäßig angenommen wird) berechnen. Könntest du den IWV vom HATPRO nehmen um das Modelprofil damit zu skalieren?
+    # TODO: use measured 2 m air temperature
+    # TODO: derive surface skin temperature from measured LW up with certain emissivity (which one, 0.998?)
+    # TODO: use HATPRO IWV to scale model specific humidity
+    # TODO: other surface albedo
     # make test without "radius_or_water_path_is_zero" test in sanity enforcer; or setting re_liq or re_ice to val[0] instead of 0 in first check
+    # compare self-computed HR and original HR
 
 
 def prepare_tcars_client_for_sim(tcars_client):
@@ -81,19 +87,20 @@ def set_emissivity(tcars_client, emissivity: float):
 
 
 def prepare_tcars_ds(
+    timeline: np.ndarray,
     meteo_ds: xr.Dataset, 
     mp_ds: xr.Dataset, 
-    height_grid: np.ndarray,
-    date: np.datetime64):
+    height_grid: np.ndarray):
     
     """
-    Extract pressure, temperature and humidity data from meteo data set (meteo_ds). Extract 
-    microphysical data (droplet effective radii, ice crystal effective radii, ice and liquid 
-    water contents) from mp_ds. The data will be put onto levels ('half levels') and
+    For certain timeline over which the simulation is supposed to run, extract pressure, 
+    temperature and humidity data from meteo data set (meteo_ds) and extract microphysical
+    data (droplet effective radii, ice crystal effective radii, ice and liquid water contents) 
+    from mp_ds. The data will be put onto levels ('half levels' or 'layer boundaries') and 
     layers ('full levels').
     """
     
-    timeline = mp_ds.time.sel(time=date.astype('datetime64[D]').astype('str')).values
+    mp_ds = mp_ds.interp({'time': timeline}, method='linear')
     meteo_ds = meteo_ds.interp({'time': timeline}, method='linear')
     
     ds = init_tcars_ds(time=timeline,
@@ -361,6 +368,13 @@ def init_tcars_ds(
     DS['julian_day'] = DS.time.dt.dayofyear
     
     return DS
+
+
+def set_hourly_simulation_timeline(date: np.datetime64, hour: int, time: xr.DataArray):
+    
+    timeline = time.sel(time=date.astype('datetime64[D]').astype('str')).sel(time=time.dt.hour == hour).values
+    
+    return timeline
 
 
 def data_overview_quicklooks(
