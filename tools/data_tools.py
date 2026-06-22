@@ -164,7 +164,8 @@ def get_files_daterange_filepattern(
     date1=None,
     daterange=None,
     default_daterange=np.array([np.datetime64("2001-01-01")]),
-    file_pattern="*__DATE_STRING__*.nc"):
+    file_pattern="*__DATE_STRING__*.nc",
+    yyyymmdd_delim=""):
     
     daterange = handle_daterange_or_date_start_end(daterange, 
                                                    date0,
@@ -173,6 +174,7 @@ def get_files_daterange_filepattern(
     
     files = identify_files_daterange(path=path_data,
                                      daterange=daterange,
-                                     file_pattern=file_pattern)
+                                     file_pattern=file_pattern,
+                                     yyyymmdd_delim=yyyymmdd_delim)
     
     return files
