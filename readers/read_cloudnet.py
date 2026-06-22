@@ -7,11 +7,19 @@ import numpy as np
 import _paths
 from tools.data_tools import get_files_daterange_filepattern
 
-translate_dict = {'temperature': 'temp', 
-                  'pressure': 'pres',
-                  'uwind': 'u',
-                  'vwind': 'v',
-                  'q': 'q'}
+categorize_model_translate_dict = {'temperature': 'temp', 
+                                   'pressure': 'pres',
+                                   'uwind': 'u',
+                                   'vwind': 'v',
+                                   'q': 'q'}
+microphysics_translate_dict = {'der': 're_liq',
+                               'der_scaled': 're_liq_scaled',
+                               'der_error': 're_liq_error',
+                               'der_scaled_error': 're_liq_scaled_error',
+                               'der_retrieval_status': 're_liq_retrieval_status',
+                               'ier_retrieval_status': 're_ice_retrieval_status',
+                               'ier_error': 're_ice_error',
+                               'ier': 're_ice'}
 
 def read_cloudnet_categorize_model_data(
     path_data="",
@@ -26,7 +34,7 @@ def read_cloudnet_categorize_model_data(
         data_vars = [*ds.data_vars]
         remove_vars = [var for var in data_vars if var not in keep_vars]
         ds = ds.drop_vars(remove_vars)
-        ds = ds.rename_vars(translate_dict)
+        ds = ds.rename_vars(categorize_model_translate_dict)
         
         ds = ds.drop_dims(['time', 'height'])
         ds = ds.rename({'model_time': 'time', 'model_height': 'height'})
@@ -80,6 +88,8 @@ def read_cloudnet_microphysics_retrievals_data(
     ds = xr.merge(ds_dict.values())
     ds = add_height_levels_from_layers(ds)
     ds = add_iwc_lwc_for_levels(ds)
+    
+    ds = ds.rename_vars(microphysics_translate_dict)
     
     return ds.load()
 
