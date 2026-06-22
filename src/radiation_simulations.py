@@ -45,6 +45,7 @@ def main():
     
     tcars_client.set_rrtmg_input(which_std_atm="midlat_summer")
     pdb.set_trace()
+    tcars_client.run_tcars()
     
     
     # set up t-cars

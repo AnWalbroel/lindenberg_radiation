@@ -164,7 +164,7 @@ class tcars:
         self.update_aerosol_properties()
 
         atm_args = ['Play', 'Plev',                                  # pressure of layer and level in hPa
-                    'Tlay', 'Tlev', 'Tsfc',                          # temperature of layer and level in K
+                    'Tlay', 'Tlev', 'Tsfc',                          # temperature of layer and level (layer boundaries) in K
                     'h2ovmr', 'o3vmr', 'co2vmr', 'ch4vmr', 'n2ovmr', # vol mix ratio of gases
                     'o2vmr', 'cfc11vmr', 'cfc12vmr', 'ccl4vmr', 'cfc22vmr']
         
@@ -174,8 +174,8 @@ class tcars:
                 try:
                     atm[t_var] = np.asfortranarray(self.ds[ds_var], dtype=np.float64)
                 except KeyError:
-                    print(f"{ds_var} is needed but was not found in the dataset provided to {os.path.basename(__file__)}" +
-                        f" while executing {sys.argv[0]}.")
+                    print(f"{ds_var} is needed but was not found in the dataset provided to {os.path.basename(__file__)}" + 
+                          f" while executing {sys.argv[0]}.")
                 
                 
         for var in [
@@ -255,7 +255,7 @@ class tcars:
                      're_liq': 're_liq',
                      're_ice': 're_ice',
                      'tauc_sw': 'tauc_sw',
-                     'tauc_lw': 'lauc_lw',
+                     'tauc_lw': 'tauc_lw',
                      'ssac_sw': 'ssac_sw',
                      'asmc_sw': 'asmc_sw',
                      'fsfc_sw': 'fsfc_sw',
@@ -321,7 +321,6 @@ class tcars:
         """
         
         self.ds['temp'][...] = 0.5*(self.ds['temp_h'].values[...,:-1] + self.ds['temp_h'].values[...,1:])
-        self.ds['temp_sfc'][:] = self.ds['temp_h'].sel(height_h=0., method='nearest')
     
     
     def update_cloud_properties(self):
