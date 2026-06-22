@@ -43,13 +43,11 @@ def main():
     tcars_client = tcars(path_tcars_data=path_tcars_data, ds=ds)
     tcars_client = prepare_tcars_client_for_sim(tcars_client)
     
-    tcars_client.set_rrtmg_input()
+    tcars_client.set_rrtmg_input(which_std_atm="midlat_summer")
     pdb.set_trace()
     
     
     # set up t-cars
-    # cloud sanity enforcer, check logic in loop
-    # simplify load_background_vmrs if elif
     # Könntest du da die 2m Lufttemperatur einbeziehen? Als surface (skin) temperature könnte man einfach aus LW up mit gewählter Emissivitität (0.998? oder was da standardmäßig angenommen wird) berechnen. Könntest du den IWV vom HATPRO nehmen um das Modelprofil damit zu skalieren?
     # make test without "radius_or_water_path_is_zero" test in sanity enforcer; or setting re_liq or re_ice to val[0] instead of 0 in first check
 
