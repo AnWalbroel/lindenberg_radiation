@@ -25,9 +25,10 @@ def main():
                               "data_overview/")
     
     date_str = "2025-10-01"
+    date = np.datetime64(date_str)
     station_ele_amsl = 104.                      # station elevation above mean sea level in m (manually extracted from cloudnet data)
     height_grid = np.arange(station_ele_amsl, 25000., 10.)      # lower boundary
-    date = np.datetime64(date_str)
+    
     data_quicklooks = False
     set_dict = {'save_figures': False,
                 'date_str': date_str}
