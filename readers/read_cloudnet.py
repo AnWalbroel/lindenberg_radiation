@@ -81,7 +81,7 @@ def read_cloudnet_microphysics_retrievals_data(
         
         ds_dict[key] = read_files(files)
     
-    ds = xr.merge(ds_dict.values())
+    ds = xr.merge(ds_dict.values(), compat='no_conflicts')
     ds = add_height_levels_from_layers(ds)
     ds = add_iwc_lwc_for_levels(ds)
     
