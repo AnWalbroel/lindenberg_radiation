@@ -396,6 +396,10 @@ class tcars:
     
     def organise_output(self):
         
+        def correct_uppermost_shortwave_heating_rate():
+            
+            self.out_ds['swhr'][{'height': -1}] = self.out_ds['swhr_raw'].isel(height=-1)
+        
         self.out_ds = xr.Dataset(coords=self.ds.coords)
         
         n_time, n_hgt, n_hgt_h = len(self.ds.time), len(self.ds.height), len(self.ds.height_h)
@@ -409,10 +413,10 @@ class tcars:
             elif flx.shape == shape_lev:
                 dims_list.append('height_h')
             self.out_ds[var] = xr.DataArray(flx, dims=dims_list)
-            
-            
+        
+        
         # pyRRTMG seems to return incorrect heating rates for the uppermost height layer. 
-        # Compute it manually instead:
+        # Compute it also manually:
         spec_hum = h2ovmr_to_q(self.ds.h2o_vmr)
         rho_v = convert_spechum_to_abshum(self.ds.temp, self.ds.pres*100., spec_hum)
         rho = rho_air(self.ds.pres*100., self.ds.temp, rho_v)
@@ -421,7 +425,9 @@ class tcars:
                 HR_ = compute_heating_rate(self.out_ds[f'{band}uflx{sky_cond}'], 
                                            self.out_ds[f'{band}dflx{sky_cond}'], 
                                            rho, self.ds.height_h, convert_to_K_day=True)
-                self.out_ds[f'{band}hr{sky_cond}'] = HR_
+                self.out_ds[f'{band}hr{sky_cond}_raw'] = HR_
+        
+        correct_uppermost_shortwave_heating_rate()
         
         
         # information about the variable names and their meanings: 

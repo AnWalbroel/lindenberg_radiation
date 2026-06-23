@@ -1,4 +1,7 @@
 import os
+import sys
+wdir = os.getcwd()
+if wdir not in sys.path: sys.path.append(wdir)
 import pdb
 
 import numpy as np
@@ -50,11 +53,10 @@ def main():
         tcars_client.save_output(path_output, filename_tcars_sim)
     
     # TODO: use measured 2 m air temperature
-    # TODO: derive surface skin temperature from measured LW up with certain emissivity (which one, 0.998?)
     # TODO: use HATPRO IWV to scale model specific humidity
     # TODO: other surface albedo
-    # make test without "radius_or_water_path_is_zero" test in sanity enforcer; or setting re_liq or re_ice to val[0] instead of 0 in first check
-    # compare self-computed HR and original HR
+    # TODO: other surface emissivity?
+    # TODO: make test without "radius_or_water_path_is_zero" test in sanity enforcer; or setting re_liq or re_ice to val[0] instead of 0 in first check
 
 
 def prepare_tcars_client_for_sim(tcars_client):
