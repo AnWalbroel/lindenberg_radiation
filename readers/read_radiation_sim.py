@@ -8,10 +8,11 @@ from _paths import path_radiation_sim
 from tools.data_tools import get_files_daterange_filepattern
 
 
-def read_pyRRTMG_simulation(
+def read_pyrrtmg_simulation(
     path_data="",
     date="2025-10-01",
-    hour=np.arange(24)):
+    hour=np.arange(24),
+    file_pattern="lindenberg_radiation_sim___DATE_STRING__T__HOUR__.nc"):
     
     """
     Reads shortwave and longwave broadband radiation simulated with pyRRTMG for a given date
@@ -30,7 +31,6 @@ def read_pyRRTMG_simulation(
     
     if path_data == '': path_data = path_radiation_sim
     
-    file_pattern = "lindenberg_radiation_sim___DATE_STRING__T__HOUR__.nc"
     files = identify_hourly_files(path_data, date, hour, file_pattern=file_pattern)
     
     ds = xr.open_mfdataset(files, combine='nested', concat_dim='time')
