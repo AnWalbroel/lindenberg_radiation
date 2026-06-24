@@ -6,6 +6,33 @@ import numpy as np
 import xarray as xr
 
 
+def running_mean_pdtime(x, N, t):
+    
+    """
+    Running mean of a 1D array x with a window width of N seconds.
+
+    Parameters:
+    -----------
+    x : array of floats
+        1D data vector of which the running mean is to be taken.
+    N : int
+        Running mean window width in seconds.
+    t : array of floats
+        1D time vector (in numpy datetime64[ns]) required to
+        compute the actual running mean window width.
+    """
+
+    # first, create xarray DataArray and convert it to pandas DataFrame:
+    x_DA = xr.DataArray(x, dims=['time'], coords={'time': (['time'], t)})
+    x_DF = x_DA.to_dataframe(name='x')
+
+    # compute running mean (rolling mean): center=True is recommended to have a 5-min running
+    # at 2020-01-01T14:00:00 from 2020-01-01T13:57:30 until 2020-01-01T14:02:30.
+    x_rm = x_DF.rolling(f"{int(N)}S", center=True).mean().to_xarray().x
+
+    return x_rm.values
+
+
 def encode_time(
     DS: xr.Dataset, 
     time_var='time', 

@@ -6,6 +6,7 @@ import numpy as np
 
 from _paths import path_cloudnet_data
 from tools.data_tools import get_files_daterange_filepattern
+from tools.met_tools import compute_IWV_q
 
 categorize_model_translate_dict = {'temperature': 'temp', 
                                    'pressure': 'pres',
@@ -26,7 +27,8 @@ def read_cloudnet_categorize_model_data(
     date0=None,
     date1=None,
     daterange=None,
-    file_pattern="__DATE_STRING___lindenberg_categorize.nc"):
+    file_pattern="__DATE_STRING___lindenberg_categorize.nc",
+    add_iwv=True):
     
     def preprocess_model_data(ds: xr.Dataset):
         
@@ -50,6 +52,13 @@ def read_cloudnet_categorize_model_data(
                                             default_daterange=np.array([np.datetime64('2025-10-01')]),
                                             file_pattern=file_pattern)
     ds = read_files(files, process_fct=preprocess_model_data)
+    
+    if add_iwv:
+        n_time = len(ds.time)
+        ds['iwv'] = xr.DataArray(np.full((n_time,), np.nan), dims=['time'],
+                                 attrs={'units': "kg m-2"})
+        for k in range(n_time):
+            ds['iwv'][k] = compute_IWV_q(ds['q'].isel(time=k).values, ds['pres'].isel(time=k).values)
     
     return ds.load()
 

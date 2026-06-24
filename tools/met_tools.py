@@ -2,6 +2,193 @@ import tools.constants as constants
 import numpy as np
 
 
+def compute_IWV_q(
+    q,
+    press,
+    nan_threshold=0.0,
+    scheme='balanced'):
+
+    """
+    Compute Integrated Water Vapour (also known as precipitable water content)
+    out of specific humidity (in kg kg^-1), gravitational constant and air pressure (in Pa).
+    The moisture data may contain certain number gaps (up to nan_threshold*n_levels) but
+    the height variable must be free of gaps.
+
+    Parameters:
+    -----------
+    q : array of floats
+        One dimensional array of specific humidity in kg kg^-1.
+    press : array of floats
+        One dimensional array of pressure in Pa.
+    nan_threshold : float, optional
+        Threshold describing the fraction of nan values of the total height level
+        number that is still permitted for computation.
+    scheme : str, optional
+        Chose the scheme 'balanced' or 'top_weighted'. They differ in the way the altitude
+        levels are used to compute IWV. Recommendation and default: 'balanced'
+    """
+
+    IWV = np.nan
+
+    # Check if the Pressure axis is sorted in descending order:
+    if np.any(np.diff(press) > 0):
+        print("Warning! Height axis must be in ascending order (pressure in descending) to compute the integrated" +
+            " water vapour.")
+
+        # if the pressure data is okay until 300 hPa, compute IWV nonetheless and truncate the
+        # profile beyond:
+        where_broken = np.where(np.diff(press) > 0)[0]      # when where_broken == 152, then press[153] - press[152] is broken
+        if press[where_broken[0]] > 30000.0:    # then, sufficient altitude doesn't have valid data valid data, return IWV=nan
+            return IWV
+
+    # truncate data to non nan height or pressure levels:
+    non_nan_idx = np.where(~np.isnan(press))[0]
+    q = q[non_nan_idx[0]:non_nan_idx[-1]+1]
+    press = press[non_nan_idx[0]:non_nan_idx[-1]+1]
+
+    # check if height axis is free of gaps:
+    if np.any(np.isnan(np.diff(press))): 
+        print("Height axis contains gaps. Aborted IWV computation.")
+        return IWV
+
+
+    n_height = len(press)
+    # Check if q has got any gaps:
+    n_nans = np.count_nonzero(np.isnan(q))
+
+
+    # If no nans exist, the computation is simpler. If some nans exist IWV will still be
+    # computed but needs to look for the next non-nan value. If too many nans exist IWV
+    # won't be computed.
+    if scheme == 'balanced':
+        if (n_nans == 0):
+
+            IWV = 0.0
+            for k in range(n_height):
+                if k == 0:      # bottom of grid
+                    dp = 0.5*(press[k+1] - press[k])        # just a half of a level difference
+
+                elif k == n_height-1:   # top of grid
+                    dp = 0.5*(press[k] - press[k-1])        # the other half level difference
+
+                else:           # mid of grid
+                    dp = 0.5*(press[k+1] - press[k-1])
+
+                IWV = IWV - q[k]*dp
+
+        elif n_nans / n_height < nan_threshold:
+
+            # Loop through height grid:
+            IWV = 0.0
+            k = 0
+            prev_nonnan_idx = -1
+            while k < n_height:
+
+                # check if hum on current level is nan:
+                # if so search for the next non-nan level:
+                if np.isnan(q[k]):
+                    next_nonnan_idx = np.where(~np.isnan(q[k:]))[0]
+
+                    if (len(next_nonnan_idx) > 0) and (prev_nonnan_idx >= 0):   # mid or near top of height grid
+                        next_nonnan_idx = next_nonnan_idx[0] + k    # plus k because searched over part of rho_v
+                        IWV -= 0.25*(q[next_nonnan_idx] + q[prev_nonnan_idx])*(press[k+1] - press[k-1])
+                    
+                    elif (len(next_nonnan_idx) > 0) and (prev_nonnan_idx < 0):  # bottom of height grid
+                        next_nonnan_idx = next_nonnan_idx[0] + k    # plus k because searched over part of q
+
+                        # fixing height grid variable in case only the lowest measurement doesn't exist:
+                        if np.isnan(press[0]) and not (np.isnan(press[1]+press[2])):
+                            IWV -= 0.5*q[next_nonnan_idx]*(press[2] - press[1])
+                        else:
+                            IWV -= 0.5*q[next_nonnan_idx]*(press[k+1] - press[k])
+
+                    else: # reached top of grid
+                        IWV += 0.0
+
+                else:
+                    prev_nonnan_idx = k
+
+                    if k == 0:          # bottom of grid
+                        IWV -= 0.5*q[k]*(press[k+1] - press[k])
+                    elif k == 1 and np.isnan(press[k-1]):       # next to bottom of grid
+                        IWV -= 0.5*q[k]*(press[k+1] - press[k])
+                    elif (k > 0) and (k < n_height-1):  # mid of grid
+                        IWV -= 0.5*q[k]*(press[k+1] - press[k-1])
+                    else:               # top of grid
+                        IWV -= 0.5*q[k]*(press[-1] - press[-2])
+
+                k += 1
+
+        else:
+            IWV = np.nan
+
+
+    elif scheme == 'top_weighted':
+        if (n_nans == 0):
+
+            IWV = 0.0
+            for k in range(n_height):
+                if k < n_height-2:      # bottom or mid of grid
+                    dp = press[k+1] - press[k]
+
+                else:   # top and next to top of grid
+                    dp = 0.5*(press[-1] - press[-2])        # half the height for top two levels
+
+                IWV = IWV - q[k]*dp
+
+        elif n_nans / n_height < nan_threshold:
+
+            # Loop through height grid:
+            IWV = 0.0
+            k = 0
+            prev_nonnan_idx = -1
+            while k < n_height:
+                
+                # check if hum on current level is nan:
+                # if so search for the next non-nan level:
+                if np.isnan(q[k]):
+                    next_nonnan_idx = np.where(~np.isnan(q[k:]))[0]
+
+                    if (len(next_nonnan_idx) > 0) and (prev_nonnan_idx >= 0):   # mid of height grid
+                        next_nonnan_idx = next_nonnan_idx[0] + k    # plus k because searched over part of q
+
+                        if k+1 != n_height-1:
+                            IWV -= 0.5*(q[next_nonnan_idx] + q[prev_nonnan_idx])*(press[k+1] - press[k])
+                        else:   # near top of grid
+                            IWV -= 0.25*(q[next_nonnan_idx] + q[prev_nonnan_idx])*(press[k+1] - press[k])
+                    
+                    elif (len(next_nonnan_idx) > 0) and (prev_nonnan_idx < 0):  # bottom of height grid
+                        next_nonnan_idx = next_nonnan_idx[0] + k    # plus k because searched over part of q
+
+                        # fixing height grid variable in case only the lowest measurement doesn't exist:
+                        if np.isnan(press[0]) and not (np.isnan(press[1]+press[2])):
+                            IWV -= q[next_nonnan_idx]*(press[2] - press[1])
+                        else:
+                            IWV -= q[next_nonnan_idx]*(press[k+1] - press[k])
+                        
+
+                    else: # reached top of grid
+                        IWV += 0.0
+
+                else:
+                    prev_nonnan_idx = k
+
+                    if k < n_height-2:  # bottom or mid of grid
+                        IWV -= q[k]*(press[k+1] - press[k])
+                    else:               # top of grid
+                        IWV -= 0.5*q[k]*(press[-1] - press[-2])
+
+                k += 1
+
+        else:
+            IWV = np.nan
+
+
+    IWV = IWV / constants.g       # yet had to be divided by gravitational acceleration
+
+    return IWV
+
+
 def e_sat(
     temp,
     which_algo='hyland_and_wexler'):

@@ -1,5 +1,6 @@
 import os
 import sys
+from copy import deepcopy
 wdir = os.getcwd()
 if wdir not in sys.path: sys.path.append(wdir)
 import pdb
@@ -12,6 +13,8 @@ from skyfield.api import Loader
 from _paths import path_radiation_sim, path_tcars_data
 from readers.read_cloudnet import (read_cloudnet_categorize_model_data,
                                    read_cloudnet_microphysics_retrievals_data)
+from readers.read_weather_station import read_weather_station_data
+from readers.read_hatpro import read_hatpro_derived_data
 from tools.plot_tools import get_cm_cmap, change_colormap_len, create_colourbar
 from tools.met_tools import q_to_h2ovmr
 from tools.tcars import tcars
@@ -31,18 +34,35 @@ def main():
     date = np.datetime64(date_str)
     station_ele_amsl = 104.                      # station elevation above mean sea level in m (manually extracted from cloudnet data)
     height_grid = np.arange(station_ele_amsl, 25000., 10.)      # lower boundary
+    replace_2m_temp_by_obs = False
+    scale_hum_profile_by_hatpro_iwv = True
     
     data_quicklooks = False
     set_dict = {'save_figures': False,
                 'date_str': date_str}
     
+    weather_station_ds = None
+    hatpro_ds = None
+    if replace_2m_temp_by_obs:
+        weather_station_ds = read_weather_station_data(date0=date, remove_bad_quality=True)
+    if scale_hum_profile_by_hatpro_iwv:
+        hatpro_ds = read_hatpro_derived_data(vars_in=['iwv'], 
+                                             date0=date, 
+                                             remove_bad_quality=True,
+                                             apply_running_mean_sec=60)
     cn_model_ds = read_cloudnet_categorize_model_data(date0=date)
     cn_mp_ds = read_cloudnet_microphysics_retrievals_data(date0=date)
     if data_quicklooks: data_overview_quicklooks(path_plots, cn_model_ds, cn_mp_ds, **set_dict)
     
     for hour in range(24):
         timeline = set_hourly_simulation_timeline(date=date, hour=hour, time=cn_mp_ds.time)
-        ds = prepare_tcars_ds(timeline, cn_model_ds, cn_mp_ds, height_grid)
+        
+        ds = prepare_tcars_ds(timeline, 
+                              deepcopy(cn_model_ds), 
+                              deepcopy(cn_mp_ds), 
+                              height_grid, 
+                              deepcopy(weather_station_ds),
+                              deepcopy(hatpro_ds))
         tcars_client = tcars(path_tcars_data=path_tcars_data, ds=ds)
         tcars_client = prepare_tcars_client_for_sim(tcars_client)
         
@@ -52,17 +72,13 @@ def main():
         filename_tcars_sim = f"lindenberg_radiation_sim_{date_str.replace('-','')}T{hour:02}.nc"
         tcars_client.save_output(path_output, filename_tcars_sim)
     
-    # TODO: use measured 2 m air temperature
     # TODO: use HATPRO IWV to scale model specific humidity
-    # TODO: other surface albedo
-    # TODO: other surface emissivity?
-    # TODO: make test without "radius_or_water_path_is_zero" test in sanity enforcer; or setting re_liq or re_ice to val[0] instead of 0 in first check
 
 
 def prepare_tcars_client_for_sim(tcars_client):
     
     tcars_client = customise_gas_flags(tcars_client)
-    tcars_client = set_emissivity(tcars_client, 0.998)      # TODO ADAPT
+    tcars_client = set_emissivity(tcars_client, 0.98) # based on Jin and Liang, 2006, https://doi.org/10.1175/JCLI3720.1
     
     return tcars_client
 
@@ -89,8 +105,10 @@ def set_emissivity(tcars_client, emissivity: float):
 def prepare_tcars_ds(
     timeline: np.ndarray,
     meteo_ds: xr.Dataset, 
-    mp_ds: xr.Dataset, 
-    height_grid: np.ndarray):
+    mp_ds: xr.Dataset,
+    height_grid: np.ndarray,
+    weather_station_ds=None,
+    hatpro_ds=None):
     
     """
     For certain timeline over which the simulation is supposed to run, extract pressure, 
@@ -100,8 +118,9 @@ def prepare_tcars_ds(
     layers ('full levels').
     """
     
-    mp_ds = mp_ds.interp({'time': timeline}, method='linear')
-    meteo_ds = meteo_ds.interp({'time': timeline}, method='linear')
+    meteo_ds = prepare_meteo_dataset(meteo_ds, timeline, height_lev=height_grid)
+    meteo_ds = modify_meteo_data(meteo_ds, weather_station_ds, hatpro_ds)
+    mp_ds = prepare_micophysics_dataset(mp_ds, timeline, height_lev=height_grid)
     
     ds = init_tcars_ds(time=timeline,
                        height_h=height_grid,
@@ -116,6 +135,49 @@ def prepare_tcars_ds(
 
 
 def add_cloud_data(ds: xr.Dataset, mp_ds: xr.Dataset):
+        
+    def cloud_sanity_enforcer(ds: xr.Dataset):
+        
+        bounds = {'re_liq': np.array([2.5, 60.]),
+                  're_ice': np.array([13., 130.])}
+        corresponding_water_path = {'re_liq': 'clwp',
+                                    're_ice': 'ciwp'}
+        for k, val in bounds.items():
+            wp = corresponding_water_path[k]
+            re_between_0_and_lower_bound = ((ds[k] > 0.) & (ds[k] < val[0]))
+            ds[k] = ds[k].where(~re_between_0_and_lower_bound, other=val[0])
+            ds[wp] = ds[wp].where(~re_between_0_and_lower_bound, other=val[0])
+            
+            radius_or_water_path_is_zero = (ds[k] == 0.) | (ds[wp] == 0.)
+            ds[k] = ds[k].where(~radius_or_water_path_is_zero, other=0.)
+            ds[wp] = ds[wp].where(~radius_or_water_path_is_zero, other=0.)
+        
+        return ds
+    
+    cloud_vars = ['re_liq', 're_ice', 'ciwp', 'clwp']
+    for var in cloud_vars:
+        if var in ds.data_vars:
+            ds[var][...] = mp_ds[var].values
+    
+    # if (ds['clwp'] > 0).any():
+    #     ds['clwp'] = scale_microphysics_lwp_ret_by_hatpro_obs(ds['clwp'], hat_ds['lwp'],
+    #                                                          fill_mask=cloud_vars.fill_mask)
+    
+    ds = cloud_sanity_enforcer(ds)
+    
+    ds['clc'] = ds['clc'].where((ds.re_liq == 0.) & 
+                                (ds.re_ice == 0.) &
+                                (ds.ciwp == 0.) &
+                                (ds.clwp == 0.), other=1.)
+    
+    return ds
+
+
+def prepare_micophysics_dataset(
+    mp_ds: xr.Dataset, 
+    timeline: np.ndarray, 
+    height_lev: np.ndarray,
+    height_lay=None):
     
     def convert_to_rrtmg_units(ds: xr.Dataset):
         
@@ -128,48 +190,9 @@ def add_cloud_data(ds: xr.Dataset, mp_ds: xr.Dataset):
         
         return ds
     
-    def cloud_sanity_enforcer(ds: xr.Dataset):
-        
-        bounds = {'re_liq': np.array([2.5, 60.]),
-                  're_ice': np.array([13., 130.])}
-        corresponding_water_path = {'re_liq': 'clwp',
-                                    're_ice': 'ciwp'}
-        for k, val in bounds.items():
-            wp = corresponding_water_path[k]
-            re_between_0_and_lower_bound = ((ds[k] > 0.) & (ds[k] < val[0]))
-            ds[k] = ds[k].where(~re_between_0_and_lower_bound, other=0.)
-            ds[wp] = ds[wp].where(~re_between_0_and_lower_bound, other=0.)
-            
-            radius_or_water_path_is_zero = (ds[k] == 0.) | (ds[wp] == 0.)
-            ds[k] = ds[k].where(~radius_or_water_path_is_zero, other=0.)
-            ds[wp] = ds[wp].where(~radius_or_water_path_is_zero, other=0.)
-        
-        return ds
+    if height_lay is None: height_lay = 0.5*(height_lev[:-1] + height_lev[1:])
     
-    
-    mp_ds = prepare_micophysics_dataset(mp_ds, ds.height.values, ds.height_h.values)
-    cloud_vars = ['re_liq', 're_ice', 'ciwp', 'clwp']
-    for var in cloud_vars:
-        if var in ds.data_vars:
-            ds[var][...] = mp_ds[var].values
-    
-    # if (ds['clwp'] > 0).any():
-    #     ds['clwp'] = scale_microphysics_lwp_ret_by_hatpro_obs(ds['clwp'], hat_ds['lwp'],
-    #                                                          fill_mask=cloud_vars.fill_mask)
-    
-    ds = convert_to_rrtmg_units(ds)
-    ds = cloud_sanity_enforcer(ds)
-    
-    ds['clc'] = ds['clc'].where((ds.re_liq == 0.) & 
-                                (ds.re_ice == 0.) &
-                                (ds.ciwp == 0.) &
-                                (ds.clwp == 0.), other=1.)
-    
-    return ds
-
-
-def prepare_micophysics_dataset(mp_ds: xr.Dataset, height_lay: np.ndarray, height_lev: np.ndarray):
-    
+    mp_ds = mp_ds.interp({'time': timeline}, method='linear')
     mp_ds = mp_ds.interp({'height': height_lay,
                           'height_lev': height_lev},
                          method='linear',
@@ -177,6 +200,8 @@ def prepare_micophysics_dataset(mp_ds: xr.Dataset, height_lay: np.ndarray, heigh
     for var in ['re_liq', 're_liq_scaled', 're_ice', 'iwc', 'lwc', 'iwc_lev', 'lwc_lev']:
         mp_ds[var] = mp_ds[var].where(~mp_ds[var].isnull(), other=0.)
     mp_ds = get_layer_water_paths(mp_ds)
+    
+    mp_ds = convert_to_rrtmg_units(mp_ds)
     
     return mp_ds
 
@@ -279,17 +304,13 @@ def meteo_to_tcars_ds(ds: xr.Dataset, meteo_ds: xr.Dataset):
     
     def meteo_quality_control(ds: xr.Dataset):
         
-        assert ((ds.temp > 170.) & (ds.temp < 330.)).all()
+        assert ((ds.temp > 170.) & (ds.temp < 330.)).all()        
         assert ((ds.pres < 1200.)).all()
         assert ((ds.h2o_vmr >= 0.)).all()
         assert (~(ds.temp + ds.pres + ds.h2o_vmr).isnull()).all()
         assert (~(ds.temp_h + ds.pres_h).isnull()).all()
         
         return ds
-        
-    meteo_ds['h2o_vmr'] = q_to_h2ovmr(meteo_ds.q)
-    meteo_ds['pres'] *= 0.01        # Pa to hPa
-    meteo_ds = meteo_ds.interp(height=ds.height_h.values)
     
     for var in ['pres', 'temp', 'h2o_vmr']:
         ds[var+"_h"] = xr.DataArray(meteo_ds[var].values,
@@ -304,6 +325,43 @@ def meteo_to_tcars_ds(ds: xr.Dataset, meteo_ds: xr.Dataset):
     ds = meteo_quality_control(ds)
     
     return ds
+
+
+def modify_meteo_data(meteo_ds: xr.Dataset, weather_station_ds=None, hatpro_ds=None):
+    
+    def replace_near_sfc_air_temp(meteo_ds: xr.Dataset, temp_2m: xr.DataArray):
+        
+        temp_2m = temp_2m.interp({'time': meteo_ds.time})
+        temp_2m = temp_2m.ffill('time').bfill('time')
+        meteo_ds['temp'][{'height': 0}] = temp_2m.values
+        
+        return meteo_ds
+    
+    def scale_humidity_profile_with_hatpro_iwv(meteo_ds: xr.Dataset, iwv: xr.DataArray):
+        
+        iwv = iwv.interp({'time': meteo_ds.time})
+        iwv = iwv.ffill('time').bfill('time')
+        meteo_ds['q'] *= iwv/meteo_ds['iwv']
+        
+        return meteo_ds
+    
+    if weather_station_ds is not None:
+        meteo_ds = replace_near_sfc_air_temp(meteo_ds, weather_station_ds.temp)
+    if hatpro_ds is not None:
+        meteo_ds = scale_humidity_profile_with_hatpro_iwv(meteo_ds, hatpro_ds.iwv)
+    
+    return meteo_ds
+
+
+def prepare_meteo_dataset(meteo_ds: xr.Dataset, timeline: np.ndarray, height_lev: np.ndarray):
+    
+    meteo_ds['h2o_vmr'] = q_to_h2ovmr(meteo_ds.q)
+    meteo_ds['pres'] *= 0.01        # Pa to hPa
+    
+    meteo_ds = meteo_ds.interp({'time': timeline}, method='linear')
+    meteo_ds = meteo_ds.interp(height=height_lev)
+    
+    return meteo_ds
 
 
 def init_tcars_ds(
