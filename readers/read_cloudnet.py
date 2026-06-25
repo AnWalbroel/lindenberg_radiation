@@ -28,7 +28,7 @@ def read_cloudnet_categorize_model_data(
     date1=None,
     daterange=None,
     file_pattern="__DATE_STRING___lindenberg_categorize.nc",
-    add_iwv=True):
+    add_iwv=False):
     
     def preprocess_model_data(ds: xr.Dataset):
         
