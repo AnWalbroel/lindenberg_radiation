@@ -8,7 +8,7 @@ from _paths import path_hatpro_data
 from tools.data_tools import get_files_daterange_filepattern, running_mean_pdtime
 from readers.read_weather_station import rename_data_vars_incl_substrings, set_bad_quality_to_nan
 
-translate_dict = {
+hatpro_translate_dict = {
     'iwv': 'iwv',
     'lwp': 'lwp',
     'temperature': 'temp',
@@ -43,13 +43,13 @@ def read_hatpro_derived_data(
     del_vars = [var for var in ds.data_vars if ((var not in vars_in) and (np.all(np.char.find(var, vars_in) == -1)))]
     ds = ds.drop_vars(del_vars)
     
-    ds = rename_data_vars_incl_substrings(ds, translate_dict)
+    ds = rename_data_vars_incl_substrings(ds, hatpro_translate_dict)
     
     if remove_bad_quality:
         ds = set_bad_quality_to_nan(ds, good_quality_condition=lambda x: x == 0)
     
     if apply_running_mean_sec > 0:
-        vars_for_running_mean = [translate_dict[var_in] for var_in in vars_in]
+        vars_for_running_mean = [hatpro_translate_dict[var_in] for var_in in vars_in]
         for var in vars_for_running_mean:
             if ds[var].ndim > 1: raise NotImplementedError
             ds[var][...] = running_mean_pdtime(ds[var].values, 
