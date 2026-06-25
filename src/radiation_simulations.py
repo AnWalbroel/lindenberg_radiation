@@ -10,13 +10,13 @@ import xarray as xr
 from skyfield import api
 from skyfield.api import Loader
 
-from _paths import path_radiation_sim, path_tcars_data
+from _paths import path_radiation_sim, path_tcars_data, path_plots_data_overview
 from readers.read_cloudnet import (read_cloudnet_categorize_model_data,
                                    read_cloudnet_microphysics_retrievals_data)
 from readers.read_weather_station import read_weather_station_data
 from readers.read_hatpro import read_hatpro_derived_data
 from tools.plot_tools import get_cm_cmap, change_colormap_len, create_colourbar
-from tools.met_tools import q_to_h2ovmr
+from tools.met_tools import q_to_h2ovmr, compute_IWV_q
 from tools.tcars import tcars
 
 
@@ -27,14 +27,13 @@ def main():
     """
     
     path_output = path_radiation_sim
-    path_plots = os.path.join(os.environ['PATH_PLOTS_BASE'],
-                              "data_overview/")
+    path_plots = path_plots_data_overview
     
     date_str = "2025-10-01"
     date = np.datetime64(date_str)
     station_ele_amsl = 104.                      # station elevation above mean sea level in m (manually extracted from cloudnet data)
-    height_grid = np.arange(station_ele_amsl, 25000., 10.)      # lower boundary
-    replace_2m_temp_by_obs = False
+    height_grid = define_height_grid(station_ele_amsl)
+    replace_2m_temp_by_obs = True
     scale_hum_profile_by_hatpro_iwv = True
     
     data_quicklooks = False
@@ -71,8 +70,6 @@ def main():
         
         filename_tcars_sim = f"lindenberg_radiation_sim_{date_str.replace('-','')}T{hour:02}.nc"
         tcars_client.save_output(path_output, filename_tcars_sim)
-    
-    # TODO: use HATPRO IWV to scale model specific humidity
 
 
 def prepare_tcars_client_for_sim(tcars_client):
@@ -304,7 +301,7 @@ def meteo_to_tcars_ds(ds: xr.Dataset, meteo_ds: xr.Dataset):
     
     def meteo_quality_control(ds: xr.Dataset):
         
-        assert ((ds.temp > 170.) & (ds.temp < 330.)).all()        
+        assert ((ds.temp > 170.) & (ds.temp < 330.)).all()
         assert ((ds.pres < 1200.)).all()
         assert ((ds.h2o_vmr >= 0.)).all()
         assert (~(ds.temp + ds.pres + ds.h2o_vmr).isnull()).all()
@@ -337,7 +334,15 @@ def modify_meteo_data(meteo_ds: xr.Dataset, weather_station_ds=None, hatpro_ds=N
         
         return meteo_ds
     
-    def scale_humidity_profile_with_hatpro_iwv(meteo_ds: xr.Dataset, iwv: xr.DataArray):
+    def scale_spec_humidity_profile_with_hatpro_iwv(meteo_ds: xr.Dataset, iwv: xr.DataArray):
+        
+        n_time = len(meteo_ds.time)
+        meteo_ds['iwv'] = xr.DataArray(np.full((n_time,), np.nan), dims=['time'],
+                                 attrs={'units': "kg m-2"})
+        pres_si = meteo_ds['pres']*100.
+        for k in range(n_time):
+            meteo_ds['iwv'][k] = compute_IWV_q(meteo_ds['q'].isel(time=k).values, 
+                                               pres_si.isel(time=k).values)
         
         iwv = iwv.interp({'time': meteo_ds.time})
         iwv = iwv.ffill('time').bfill('time')
@@ -348,7 +353,8 @@ def modify_meteo_data(meteo_ds: xr.Dataset, weather_station_ds=None, hatpro_ds=N
     if weather_station_ds is not None:
         meteo_ds = replace_near_sfc_air_temp(meteo_ds, weather_station_ds.temp)
     if hatpro_ds is not None:
-        meteo_ds = scale_humidity_profile_with_hatpro_iwv(meteo_ds, hatpro_ds.iwv)
+        meteo_ds = scale_spec_humidity_profile_with_hatpro_iwv(meteo_ds, hatpro_ds.iwv)
+        meteo_ds['h2o_vmr'] = q_to_h2ovmr(meteo_ds.q)
     
     return meteo_ds
 
@@ -433,6 +439,16 @@ def set_hourly_simulation_timeline(date: np.datetime64, hour: int, time: xr.Data
     timeline = time.sel(time=date.astype('datetime64[D]').astype('str')).sel(time=time.dt.hour == hour).values
     
     return timeline
+
+
+def define_height_grid(surface_height=0.):
+    
+    height_grid0 = np.arange(surface_height, 5000., 10)
+    height_grid1 = np.arange(height_grid0[-1] + 10., 10000., 20)
+    height_grid2 = np.arange(height_grid1[-1] + 20., 25000., 50)
+    height_grid = np.concatenate((height_grid0, height_grid1, height_grid2))
+    
+    return height_grid
 
 
 def data_overview_quicklooks(

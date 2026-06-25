@@ -10,14 +10,13 @@ import matplotlib as mpl
 mpl.use("WebAgg")
 import matplotlib.pyplot as plt
 
-import _paths
+from _paths import path_plot_compare_radiation_sim_obs
 from readers.read_radiation_sim import read_pyrrtmg_simulation
 from readers.read_radiation_obs import read_bsrn
 
 def main():
     
-    path_plots = os.path.join(os.environ['PATH_PLOTS_BASE'],
-                              "compare_radiation_sim_obs/")
+    path_plots = path_plot_compare_radiation_sim_obs
     
     date_str = "2025-10-01"
     date_str_yyyymmdd = date_str.replace('-','')
