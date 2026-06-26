@@ -28,7 +28,7 @@ def running_mean_pdtime(x, N, t):
 
     # compute running mean (rolling mean): center=True is recommended to have a 5-min running
     # at 2020-01-01T14:00:00 from 2020-01-01T13:57:30 until 2020-01-01T14:02:30.
-    x_rm = x_DF.rolling(f"{int(N)}S", center=True).mean().to_xarray().x
+    x_rm = x_DF.rolling(f"{int(N)}s", center=True).mean().to_xarray().x
 
     return x_rm.values
 
