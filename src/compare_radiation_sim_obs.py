@@ -31,9 +31,9 @@ def main():
     ds_sim['swdifflx'] = compute_diffuse_from_direct_and_global_radiation(ds_sim['swdirflx'], ds_sim['swdflx'])
     
     
-    # plot_obs_overview(ds_obs, path_plots,
-    #                   plot_name=f"lindenberg_radiation_obs_overview_{date_str_yyyymmdd}",
-    #                   **set_dict)
+    plot_obs_overview(ds_obs, path_plots,
+                      plot_name=f"lindenberg_radiation_obs_overview_{date_str_yyyymmdd}",
+                      **set_dict)
     plot_obs_overview_with_sim_overlying(ds_obs,
                                          ds_sim, 
                                          path_plots, 
